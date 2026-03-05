@@ -1,0 +1,6 @@
+
+train: /content/drive/MyDrive/enrichment/train/images
+val: /content/drive/MyDrive/enrichment/val/images
+
+nc: 2
+names: ['nohelmet', 'safetyhelmet']
