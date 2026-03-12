@@ -107,7 +107,7 @@ def draw_multi_panel(img, safe_count, danger_count, total, frame_w, frame_h):
 
     # Card: No helmet
     draw_card(img, margin*3 + card_w*2, cy_top, card_w, card_h,
-              "No Helmet", danger_count, "warn", CLR_RED, "!")
+              "No Helmet", danger_count, "warning", CLR_RED, "!")
 
 def draw_person_box(img, x1, y1, x2, y2, label, idx):
     is_safe  = (label == "safetyhelmet")
