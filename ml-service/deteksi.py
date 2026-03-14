@@ -7,7 +7,6 @@ MODEL_PATH   = "helmet_k3_model/weights/best.pt"
 CONF_THRESH  = 0.45
 CAM_INDEX    = 0
 
-# Palette warna (BGR)
 CLR_GREEN    = (50,  205,  50)
 CLR_RED      = (45,   45, 220)
 CLR_YELLOW   = (0,   200, 220)

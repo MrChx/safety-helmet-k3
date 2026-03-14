@@ -6,11 +6,15 @@ function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const intervalRef = useRef<number | null>(null);
 
-  const [stats] = useState({
+  //koneksi websocket
+  const wsRef = useRef<WebSocket | null>(null);
+
+  const [stats, setStats] = useState({
     total: 0,
     safe: 0,
     danger: 0,
     confidence: 0,
+    boxes: [] as any[],
   });
 
   const [connectionStatus, setConnectionStatus] = useState<"idle" | "connecting" | "connected">("idle");
@@ -26,9 +30,9 @@ function App() {
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           videoRef.current.play().catch(e => console.error("Error playing video:", e));
-          setConnectionStatus("connecting");
 
-          setTimeout(() => setConnectionStatus("connected"), 1000);
+          setConnectionStatus("connecting");
+          initWebSocket();
         } else {
           console.error("Video ref is still null after mounting UI");
         }
@@ -37,7 +41,42 @@ function App() {
     } catch (err) {
       console.error("Error accessing camera:", err);
       alert("Tidak dapat mengakses kamera. Pastikan izin telah diberikan.");
+      setIsDetecting(false);
     }
+  };
+
+  const initWebSocket = () => {
+    // Hubungkan ke be
+    const ws = new WebSocket('ws://localhost:8081/ws/detect');
+
+    ws.onopen = () => {
+      console.log('Connected to Go Backend API');
+      setConnectionStatus("connected");
+      wsRef.current = ws;
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const result = JSON.parse(event.data);
+        if (result && typeof result.total !== 'undefined') {
+          setStats({
+            total: result.total,
+            safe: result.safe,
+            danger: result.danger,
+            confidence: result.confidence,
+            boxes: result.boxes || []
+          });
+        }
+      } catch (e) {
+        console.error("Error parsing ML result", e);
+      }
+    };
+
+    ws.onclose = () => {
+      console.log('Disconnected from Go Backend API');
+      setConnectionStatus("idle");
+      wsRef.current = null;
+    };
   };
 
   const stopCamera = () => {
@@ -46,12 +85,17 @@ function App() {
       stream.getTracks().forEach(track => track.stop());
       videoRef.current.srcObject = null;
     }
+
+    if (wsRef.current) {
+      wsRef.current.close();
+    }
+
     setIsDetecting(false);
     setConnectionStatus("idle");
     if (intervalRef.current) clearInterval(intervalRef.current);
   };
 
-  // Logika pengambilan frame
+  // Logic frame
   useEffect(() => {
     if (isDetecting && connectionStatus === "connected") {
       intervalRef.current = window.setInterval(captureFrame, 200);
@@ -62,11 +106,18 @@ function App() {
   }, [isDetecting, connectionStatus]);
 
   const captureFrame = () => {
-    if (videoRef.current && canvasRef.current) {
+    if (videoRef.current && canvasRef.current && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       const video = videoRef.current;
       const canvas = canvasRef.current;
       const context = canvas.getContext('2d');
       if (context && video.videoWidth > 0 && video.videoHeight > 0) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const frameData = canvas.toDataURL('image/jpeg', 0.8);
+        wsRef.current.send(frameData);
       }
     }
   };
@@ -358,14 +409,14 @@ function App() {
           <p className="text-gray-500 font-bold tracking-widest uppercase text-[10px] md:text-xs">Scanning for PPE compliance...</p>
         </div>
 
-        <div className="relative w-full md:w-[90%] lg:w-full max-w-5xl aspect-video md:aspect-[21/9] lg:aspect-video rounded-2xl md:rounded-[2.5rem] overflow-hidden border-2 border-[#10B981]/30 shadow-[0_0_40px_rgba(16,185,129,0.15)] md:shadow-[0_0_80px_rgba(16,185,129,0.15)] bg-black mx-4 md:mx-0">
+        <div className="relative w-full aspect-video md:aspect-[21/9] lg:aspect-video max-w-5xl mx-auto rounded-2xl md:rounded-[2.5rem] overflow-hidden border-2 border-[#10B981]/30 shadow-[0_0_40px_rgba(16,185,129,0.15)] md:shadow-[0_0_80px_rgba(16,185,129,0.15)] bg-black">
           {/* The Video Element that was missing! */}
           <video
             ref={videoRef}
             autoPlay
             playsInline
             muted
-            className="w-full h-full object-cover transform scale-[1.01]"
+            className="w-full h-full object-contain"
           />
           <canvas ref={canvasRef} className="hidden" />
 
@@ -377,12 +428,32 @@ function App() {
             <span className="w-2 h-2 md:w-2.5 md:h-2.5 bg-[#10B981] rounded-full animate-pulse shadow-[0_0_10px_#10B981]"></span> {connectionStatus === "connected" ? "CONNECTED" : "CONNECTING..."}
           </div>
 
-          {/* Bounding Box Visuals (Mocked for Demo, only shows if camera is started) */}
-          {stats.total >= 0 && (
-            <div className="absolute top-1/4 left-1/4 md:left-1/3 w-[50%] md:w-[30%] h-[50%] md:h-[35%] border-[2px] md:border-[3px] border-[#10B981] rounded-lg md:rounded-2xl shadow-[0_0_20px_rgba(16,185,129,0.4)] pointer-events-none transition-all duration-200">
-              <div className="bg-[#10B981] text-black text-[8px] md:text-[10px] absolute -top-5 md:-top-6 left-0 px-2 py-0.5 md:py-1 font-black rounded-t-md shadow-lg border border-[#10B981]">CLASS: HELMET (0.99)</div>
-            </div>
-          )}
+          {/* Dynamic Bounding Boxes */}
+          <div className="absolute inset-0 w-full h-full pointer-events-none">
+            {stats.boxes?.map((box, idx) => {
+              const isSafe = box.label === 'safetyhelmet';
+              const colorClass = isSafe ? 'border-[#10B981]' : 'border-red-500';
+              const bgClass = isSafe ? 'bg-[#10B981]' : 'bg-red-500';
+              const title = isSafe ? 'HELMET' : 'NO HELMET';
+
+              return (
+                <div
+                  key={idx}
+                  className={`absolute border-[2px] md:border-[3px] rounded-lg shadow-[0_0_15px_rgba(0,0,0,0.5)] transition-all duration-75 ${colorClass}`}
+                  style={{
+                    left: `${box.x1 * 100}%`,
+                    top: `${box.y1 * 100}%`,
+                    width: `${box.width * 100}%`,
+                    height: `${box.height * 100}%`
+                  }}
+                >
+                  <div className={`text-black flex items-center justify-center text-[8px] md:text-[10px] absolute -top-5 md:-top-6 left-[-2px] px-2 py-0.5 md:py-1 font-black rounded-t-md shadow-lg ${bgClass}`}>
+                    CLASS: {title} ({box.confidence.toFixed(2)})
+                  </div>
+                </div>
+              );
+            })}
+          </div>
 
           <div className="absolute h-[2px] md:h-[3px] w-full z-20 shadow-[0_0_15px_#10B981] bg-gradient-to-r from-transparent via-[#10B981] to-transparent animate-[scan_3s_linear_infinite] opacity-60"></div>
         </div>
@@ -390,11 +461,11 @@ function App() {
         <div className="mt-8 md:mt-16 flex flex-row gap-4 md:gap-8 px-4 w-full md:w-auto justify-center">
           <div className="bg-white/5 backdrop-blur-[20px] rounded-xl md:rounded-2xl border border-white/10 p-3 md:px-10 md:py-5 flex flex-col items-center flex-1 md:flex-none">
             <span className="text-[9px] md:text-[10px] text-gray-500 uppercase font-black tracking-widest mb-1 text-center">Confidence</span>
-            <span className="text-xl md:text-3xl font-black text-[#10B981]">{stats.confidence > 0 ? stats.confidence + '%' : '99.2%'}</span>
+            <span className="text-xl md:text-3xl font-black text-[#10B981]">{stats.total > 0 ? stats.confidence.toFixed(1) + '%' : '0%'}</span>
           </div>
-          <div className="bg-white/5 backdrop-blur-[20px] rounded-xl md:rounded-2xl border border-white/10 p-3 md:px-10 md:py-5 flex flex-col items-center flex-1 md:flex-none">
+          <div className="bg-white/5 backdrop-blur-[20px] rounded-xl md:rounded-2xl border border-white/10 p-3 md:px-10 md:py-5 flex flex-col items-center flex-1 md:flex-none transition-colors duration-500" style={{ backgroundColor: stats.danger > 0 ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.05)' }}>
             <span className="text-[9px] md:text-[10px] text-gray-500 uppercase font-black tracking-widest mb-1 text-center">Status</span>
-            <span className="text-xl md:text-3xl font-black text-white">{stats.safe > 0 ? 'SAFE' : 'SECURED'}</span>
+            <span className={`text-xl md:text-3xl font-black ${stats.danger > 0 ? "text-red-500" : "text-white"}`}>{stats.danger > 0 ? 'WARNING!' : 'SECURED'}</span>
           </div>
         </div>
       </div>
