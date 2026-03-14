@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #10B981;
+  --color-background: #050505;
+  --color-panel: rgba(255, 255, 255, 0.05);
+
+  --animate-glow-pulse: glow-pulse 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-float: float 6s ease-in-out infinite;
+  --animate-scan: scan 3s linear infinite;
+  --animate-fade-in-up: fadeInUp 1s ease-out forwards;
+  --animate-border-flow: border-flow 4s linear infinite;
+  --animate-gradient-fast: gradient-shift 3s ease infinite;
+
+  @keyframes glow-pulse {
+    0%, 100% { box-shadow: 0 0 10px #10B981, 0 0 20px #10B981; }
+    50% { box-shadow: 0 0 25px #10B981, 0 0 50px #10B981; }
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-20px); }
+  }
+  @keyframes scan {
+    0% { top: 0%; }
+    100% { top: 100%; }
+  }
+  @keyframes fadeInUp {
+    0% { opacity: 0; transform: translateY(20px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes border-flow {
+    0%, 100% { border-color: rgba(16, 185, 129, 0.2); }
+    50% { border-color: rgba(16, 185, 129, 0.8); }
+  }
+  @keyframes gradient-shift {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+}
+
+body {
+  background-color: var(--color-background);
+  color: #ffffff;
+  margin: 0;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
