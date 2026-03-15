@@ -1,9 +1,10 @@
 package routes
 
 import (
-	"time" // Added for time.Hour
+	"time"
+
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/gin-contrib/cors" // Added for CORS middleware
 
 	"k3guard/internal/delivery/http/handlers"
 )
@@ -11,7 +12,6 @@ import (
 func SetupRouter(detectionHandler *handlers.DetectionHandler) *gin.Engine {
 	r := gin.Default()
 
-	// CORS Middleware (Disiapkan untuk Vercel / Production Layer)
 	r.Use(cors.New(cors.Config{
 		AllowAllOrigins:  true,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
@@ -24,7 +24,6 @@ func SetupRouter(detectionHandler *handlers.DetectionHandler) *gin.Engine {
 	api := r.Group("/api/v1")
 	{
 		api.GET("/ping", detectionHandler.HandlePing)
-		// Tambah routes API lain di sini nanti
 	}
 
 	ws := r.Group("/ws")
