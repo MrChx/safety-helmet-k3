@@ -12,7 +12,7 @@ import numpy as np
 app = FastAPI(title="K3Guard ML Service")
 
 #memuat model
-MODEL_PATH = "../helmet_k3_model/weights/best.pt"
+MODEL_PATH = "helmet_k3_model/weights/best.pt"
 print(f"[ML SERVER] Memuat Model YOLOv8 dari {MODEL_PATH}...")
 try:
     model = YOLO(MODEL_PATH)
