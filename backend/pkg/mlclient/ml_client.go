@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"k3guard/internal/domain"
@@ -21,11 +22,16 @@ type FastAPIMLClient struct {
 }
 
 func NewFastAPIMLClient() *FastAPIMLClient {
+	mlURL := os.Getenv("ML_SERVICE_URL")
+	if mlURL == "" {
+		mlURL = "http://localhost:5000"
+	}
+
 	return &FastAPIMLClient{
 		client: &http.Client{
 			Timeout: 5 * time.Second, // Timeout stream video agar tidak backlog
 		},
-		pythonHost: "http://localhost:5000",
+		pythonHost: mlURL,
 	}
 }
 

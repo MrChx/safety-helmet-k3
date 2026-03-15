@@ -45,9 +45,14 @@ function App() {
     }
   };
 
+  // Inisialisasi Environment URL
+  const WS_URL = import.meta.env.VITE_WS_URL || "ws://localhost:8081/ws/detect";
+
   const initWebSocket = () => {
-    // Hubungkan ke be
-    const ws = new WebSocket('ws://localhost:8081/ws/detect');
+    if (wsRef.current) return;
+
+    // Connect to specific WS API Gateway Backend (Dinamis dari .env atau Default Host LokoL)
+    const ws = new WebSocket(WS_URL);
 
     ws.onopen = () => {
       console.log('Connected to Go Backend API');
