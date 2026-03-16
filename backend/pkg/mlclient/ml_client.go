@@ -29,7 +29,7 @@ func NewFastAPIMLClient() *FastAPIMLClient {
 
 	return &FastAPIMLClient{
 		client: &http.Client{
-			Timeout: 5 * time.Second, // Timeout stream video agar tidak backlog
+			Timeout: 15 * time.Second,
 		},
 		pythonHost: mlURL,
 	}
