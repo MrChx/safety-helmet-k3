@@ -435,10 +435,10 @@ function App() {
         </div>
 
         {/* Main Content Area */}
-        <div className="flex flex-col xl:flex-row w-full max-w-[1400px] h-[85vh] mt-16 px-6 gap-6 z-10">
+        <div className="flex flex-col xl:flex-row w-full max-w-[1400px] xl:h-[85vh] mt-16 px-4 xl:px-6 gap-4 xl:gap-6 z-10 overflow-y-auto pb-6">
 
-          {/* Left Panel: Camera Feed (70%) */}
-          <div className="relative flex-grow flex flex-col bg-black/40 backdrop-blur-xl rounded-[2rem] border border-white/10 p-4 shadow-2xl overflow-hidden group">
+          {/* Left Panel: Camera Feed */}
+          <div className="relative min-h-[55vh] xl:min-h-0 flex-grow flex flex-col bg-black/40 backdrop-blur-xl rounded-2xl xl:rounded-[2rem] border border-white/10 p-2 xl:p-4 shadow-2xl overflow-hidden group">
 
             {/* Camera Decorative HUD Elements */}
             <div className="absolute top-8 left-8 w-16 h-16 border-t-2 border-l-2 border-white/20 rounded-tl-3xl z-20"></div>
@@ -446,7 +446,7 @@ function App() {
             <div className="absolute bottom-8 left-8 w-16 h-16 border-b-2 border-l-2 border-white/20 rounded-bl-3xl z-20"></div>
             <div className="absolute bottom-8 right-8 w-16 h-16 border-b-2 border-r-2 border-white/20 rounded-br-3xl z-20"></div>
 
-            <div className={`relative w-full h-full rounded-[1.5rem] overflow-hidden border ${stats.danger > 0 ? 'border-red-500/50 shadow-[0_0_50px_rgba(239,68,68,0.2)]' : 'border-[#10B981]/30 shadow-[0_0_60px_rgba(16,185,129,0.15)]'} bg-[#050505] transition-all duration-500`}>
+            <div className={`relative w-full h-full rounded-xl xl:rounded-[1.5rem] overflow-hidden border ${stats.danger > 0 ? 'border-red-500/50 shadow-[0_0_50px_rgba(239,68,68,0.2)]' : 'border-[#10B981]/30 shadow-[0_0_60px_rgba(16,185,129,0.15)]'} bg-[#050505] transition-all duration-500`}>
 
               <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
               <canvas ref={canvasRef} className="hidden" />
@@ -499,11 +499,11 @@ function App() {
             </div>
           </div>
 
-          {/* Right Panel: Telemetry Dashboard (30%) */}
-          <div className="w-full xl:w-96 flex flex-col gap-4">
+          {/* Right Panel: Telemetry Dashboard */}
+          <div className="w-full xl:w-96 flex flex-col gap-3 xl:gap-4">
 
             {/* Global Status Card */}
-            <div className={`relative p-6 rounded-[2rem] border overflow-hidden transition-colors duration-500 ${stats.total === 0 ? 'bg-yellow-500/10 border-yellow-500/30' : stats.danger > 0 ? 'bg-red-500/10 border-red-500/30' : 'bg-[#10B981]/10 border-[#10B981]/30'} backdrop-blur-xl`}>
+            <div className={`relative p-4 xl:p-6 rounded-2xl xl:rounded-[2rem] border overflow-hidden transition-colors duration-500 ${stats.total === 0 ? 'bg-yellow-500/10 border-yellow-500/30' : stats.danger > 0 ? 'bg-red-500/10 border-red-500/30' : 'bg-[#10B981]/10 border-[#10B981]/30'} backdrop-blur-xl`}>
               <div className={`absolute top-0 right-0 w-32 h-32 rounded-full blur-[50px] transition-colors duration-500 ${stats.total === 0 ? "bg-yellow-500/20" : stats.danger > 0 ? "bg-red-500/20" : "bg-[#10B981]/20"}`}></div>
               <h3 className="text-gray-400 font-mono text-[10px] uppercase tracking-[0.2em] mb-2">System Status</h3>
               <div className="flex items-end gap-4 mb-4">
