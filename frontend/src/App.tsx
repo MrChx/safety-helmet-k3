@@ -1,13 +1,14 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 
 function App() {
   const [isDetecting, setIsDetecting] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const intervalRef = useRef<number | null>(null);
 
   //koneksi websocket
   const wsRef = useRef<WebSocket | null>(null);
+  const isWaitingForResponse = useRef(false);
+  const captureTimerRef = useRef<number | null>(null);
 
   const [stats, setStats] = useState({
     total: 0,
@@ -19,45 +20,43 @@ function App() {
 
   const [connectionStatus, setConnectionStatus] = useState<"idle" | "connecting" | "connected">("idle");
 
-  const startCamera = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
-      });
-      setIsDetecting(true);
-
-      setTimeout(() => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.play().catch(e => console.error("Error playing video:", e));
-
-          setConnectionStatus("connecting");
-          initWebSocket();
-        } else {
-          console.error("Video ref is still null after mounting UI");
-        }
-      }, 50);
-
-    } catch (err) {
-      console.error("Error accessing camera:", err);
-      alert("Tidak dapat mengakses kamera. Pastikan izin telah diberikan.");
-      setIsDetecting(false);
-    }
-  };
-
   // Inisialisasi Environment URL
   const WS_URL = import.meta.env.VITE_WS_URL || "ws://localhost:8081/ws/detect";
 
-  const initWebSocket = () => {
+  const captureAndSend = useCallback(() => {
+    if (!videoRef.current || !canvasRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (isWaitingForResponse.current) return;
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const context = canvas.getContext('2d');
+    if (context && video.videoWidth > 0 && video.videoHeight > 0) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const frameData = canvas.toDataURL('image/jpeg', 0.7);
+      isWaitingForResponse.current = true;
+      wsRef.current.send(frameData);
+    }
+  }, []);
+
+  const scheduleNextCapture = useCallback(() => {
+    if (captureTimerRef.current) cancelAnimationFrame(captureTimerRef.current);
+    captureTimerRef.current = requestAnimationFrame(() => {
+      captureAndSend();
+    });
+  }, [captureAndSend]);
+
+  const initWebSocket = useCallback(() => {
     if (wsRef.current) return;
 
-    // Connect to specific WS API Gateway Backend (Dinamis dari .env atau Default Host LokoL)
     const ws = new WebSocket(WS_URL);
 
     ws.onopen = () => {
       console.log('Connected to Go Backend API');
       setConnectionStatus("connected");
       wsRef.current = ws;
+      scheduleNextCapture();
     };
 
     ws.onmessage = (event) => {
@@ -75,16 +74,50 @@ function App() {
       } catch (e) {
         console.error("Error parsing ML result", e);
       }
+      isWaitingForResponse.current = false;
+      scheduleNextCapture();
+    };
+
+    ws.onerror = () => {
+      isWaitingForResponse.current = false;
     };
 
     ws.onclose = () => {
       console.log('Disconnected from Go Backend API');
       setConnectionStatus("idle");
       wsRef.current = null;
+      isWaitingForResponse.current = false;
     };
+  }, [WS_URL, scheduleNextCapture]);
+
+  const startCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
+      });
+      setIsDetecting(true);
+
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(e => console.error("Error playing video:", e));
+          setConnectionStatus("connecting");
+          initWebSocket();
+        } else {
+          console.error("Video ref is still null after mounting UI");
+        }
+      }, 50);
+
+    } catch (err) {
+      console.error("Error accessing camera:", err);
+      alert("Tidak dapat mengakses kamera. Pastikan izin telah diberikan.");
+      setIsDetecting(false);
+    }
   };
 
   const stopCamera = () => {
+    if (captureTimerRef.current) cancelAnimationFrame(captureTimerRef.current);
+
     if (videoRef.current && videoRef.current.srcObject) {
       const stream = videoRef.current.srcObject as MediaStream;
       stream.getTracks().forEach(track => track.stop());
@@ -97,34 +130,8 @@ function App() {
 
     setIsDetecting(false);
     setConnectionStatus("idle");
-    if (intervalRef.current) clearInterval(intervalRef.current);
-  };
-
-  // Logic frame
-  useEffect(() => {
-    if (isDetecting && connectionStatus === "connected") {
-      intervalRef.current = window.setInterval(captureFrame, 200);
-    }
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [isDetecting, connectionStatus]);
-
-  const captureFrame = () => {
-    if (videoRef.current && canvasRef.current && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      const context = canvas.getContext('2d');
-      if (context && video.videoWidth > 0 && video.videoHeight > 0) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-
-        context.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        const frameData = canvas.toDataURL('image/jpeg', 0.8);
-        wsRef.current.send(frameData);
-      }
-    }
+    isWaitingForResponse.current = false;
+    setStats({ total: 0, safe: 0, danger: 0, confidence: 0, boxes: [] });
   };
 
   useEffect(() => {
@@ -196,7 +203,7 @@ function App() {
           <div className="z-10 animate-[fadeInUp_1s_ease-out_forwards] order-2 lg:order-1 text-center lg:text-left mt-10 lg:mt-0">
             <span className="inline-flex items-center gap-2 py-1.5 px-4 rounded-full bg-[#10B981]/10 text-[#10B981] text-xs font-bold tracking-widest uppercase mb-6 md:mb-8 border border-[#10B981]/30 hover:bg-[#10B981]/20 transition-colors cursor-default">
               <span className="w-2 h-2 bg-[#10B981] rounded-full animate-ping"></span>
-              AI-Powered Safety Solutions
+              Deep Learning Solutions
             </span>
             <h1 className="text-5xl sm:text-6xl lg:text-8xl font-black leading-[1.1] mb-6 md:mb-8 tracking-tight group perspective-1000">
               <div className="inline-block transform transition-transform duration-700 hover:-translate-y-2 hover:rotate-2">Deteksi</div> <div className="inline-block transform transition-transform duration-700 hover:-translate-y-2 hover:-rotate-1">Helm</div> <br className="hidden md:block" />
@@ -206,7 +213,7 @@ function App() {
               </span>
             </h1>
             <p className="text-gray-400 text-lg md:text-xl mb-10 md:mb-12 max-w-lg mx-auto lg:mx-0 leading-relaxed font-medium">
-              Visi komputer tercanggih untuk otomasi kepatuhan keselamatan kerja secara real-time. Amankan operasional Anda dengan <span className="text-[#10B981]">teknologi deteksi instan</span>.
+              Visi komputer untuk otomasi kepatuhan keselamatan kerja secara real-time pada helm K3 di area kontruksi. Amankan operasional dan keselamatan anda dengan <span className="text-[#10B981]">teknologi deteksi instan</span>.
             </p>
             <div className="flex flex-col sm:flex-row flex-wrap gap-4 md:gap-6 justify-center lg:justify-start">
               <button onClick={startCamera} className="w-full sm:w-auto justify-center px-8 md:px-10 py-4 md:py-5 bg-[#10B981] text-black font-extrabold rounded-2xl animate-[glow-pulse_2.5s_cubic-bezier(0.4,0,0.6,1)_infinite] hover:scale-105 hover:bg-[#34D399] transition-all flex items-center gap-3 shadow-[0_0_20px_rgba(16,185,129,0.4)] relative overflow-hidden group">
@@ -277,7 +284,7 @@ function App() {
                 </svg>
               </div>
               <h3 className="text-xl md:text-2xl font-black mb-3 md:mb-4 text-white group-hover:text-[#0A84FF] transition-colors">Monitoring Real-time</h3>
-              <p className="text-gray-400 leading-relaxed font-medium text-sm md:text-base">Analisis feed video CCTV secara simultan dari berbagai titik koordinat tanpa hambatan latensi.</p>
+              <p className="text-gray-400 leading-relaxed font-medium text-sm md:text-base">Analisis feed video menggunakan webcam secara simultan dari berbagai titik koordinat tanpa hambatan latensi.</p>
             </div>
             {/* Feature 2 (Kuning) */}
             <div className="bg-[#0f0f12]/80 backdrop-blur-[20px] border border-white/5 rounded-3xl p-8 md:p-10 hover:border-[#F59E0B]/50 hover:bg-[#15151a] hover:shadow-[0_10px_30px_rgba(245,158,11,0.1)] hover:-translate-y-2 transition-all duration-500 reveal opacity-0 transform translate-y-10 group" style={{ transitionDelay: '0.2s' }}>
@@ -347,13 +354,13 @@ function App() {
                   <span className="shrink-0 w-10 h-10 md:w-12 md:h-12 flex items-center justify-center bg-[#10B981]/10 border border-[#10B981]/20 rounded-xl group-hover:bg-[#10B981] group-hover:scale-110 transition-all duration-300 shadow-[0_0_0_rgba(16,185,129,0)] group-hover:shadow-[0_0_15px_rgba(16,185,129,0.5)]">
                     <svg className="w-5 h-5 md:w-6 md:h-6 text-[#10B981] group-hover:text-black transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
                   </span>
-                  <span className="text-gray-300 group-hover:text-white transition-colors text-sm sm:text-base md:text-lg font-semibold pt-1 md:pt-0 leading-relaxed">Support untuk CCTV IP Camera &amp; Mobile Drone feed.</span>
+                  <span className="text-gray-300 group-hover:text-white transition-colors text-sm sm:text-base md:text-lg font-semibold pt-1 md:pt-0 leading-relaxed">Support untuk Webcam Browser, CCTV IP Camera &amp; Mobile Drone feed.</span>
                 </li>
                 <li className="flex items-start md:items-center gap-4 md:gap-5 group p-2 md:p-3 rounded-2xl hover:bg-white/5 transition-colors">
                   <span className="shrink-0 w-10 h-10 md:w-12 md:h-12 flex items-center justify-center bg-[#10B981]/10 border border-[#10B981]/20 rounded-xl group-hover:bg-[#10B981] group-hover:scale-110 transition-all duration-300 shadow-[0_0_0_rgba(16,185,129,0)] group-hover:shadow-[0_0_15px_rgba(16,185,129,0.5)]">
                     <svg className="w-5 h-5 md:w-6 md:h-6 text-[#10B981] group-hover:text-black transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
                   </span>
-                  <span className="text-gray-300 group-hover:text-white transition-colors text-sm sm:text-base md:text-lg font-semibold pt-1 md:pt-0 leading-relaxed">Analitik data mingguan untuk laporan kepatuhan K3.</span>
+                  <span className="text-gray-300 group-hover:text-white transition-colors text-sm sm:text-base md:text-lg font-semibold pt-1 md:pt-0 leading-relaxed">Pelaporan viusal yang memudahkan pengawas dalam pengecekan pekerja.</span>
                 </li>
               </ul>
             </div>
@@ -386,13 +393,13 @@ function App() {
           </div>
           <div className="pt-6 md:pt-8 border-t border-white/5 flex flex-col md:flex-row justify-between items-center gap-4 md:gap-6 text-center md:text-left">
             <div className="text-gray-600 text-xs md:text-sm font-bold uppercase tracking-widest">
-              © 2026 K3Guard AI Tech. All rights reserved.
+              © 2026 K3Guard AI Tech.
             </div>
             <div className="flex gap-4">
-              <a href="#" className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center hover:bg-[#10B981]/20 hover:text-[#10B981] transition-colors text-gray-500">
+              {/* <a href="#" className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center hover:bg-[#10B981]/20 hover:text-[#10B981] transition-colors text-gray-500">
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M24 4.557c-.883.392-1.832.656-2.828.775 1.017-.609 1.798-1.574 2.165-2.724-.951.564-2.005.974-3.127 1.195-.897-.957-2.178-1.555-3.594-1.555-3.179 0-5.515 2.966-4.797 6.045-4.091-.205-7.719-2.165-10.148-5.144-1.29 2.213-.669 5.108 1.523 6.574-.806-.026-1.566-.247-2.229-.616-.054 2.281 1.581 4.415 3.949 4.89-.693.188-1.452.232-2.224.084.626 1.956 2.444 3.379 4.6 3.419-2.07 1.623-4.678 2.348-7.29 2.04 2.179 1.397 4.768 2.212 7.548 2.212 9.142 0 14.307-7.721 13.995-14.646.962-.695 1.797-1.562 2.457-2.549z" /></svg>
-              </a>
-              <a href="#" className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center hover:bg-[#10B981]/20 hover:text-[#10B981] transition-colors text-gray-500">
+              </a> */}
+              <a href="https://github.com/MrChx/safety-helmet-k3" className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center hover:bg-[#10B981]/20 hover:text-[#10B981] transition-colors text-gray-500">
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.803 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" /></svg>
               </a>
             </div>
@@ -400,77 +407,170 @@ function App() {
         </div>
       </footer>
 
-      {/* Detection Simulation WebRTC Overlay */}
-      <div className={`fixed inset-0 z-[100] bg-black/98 backdrop-blur-3xl flex-col items-center justify-center transition-all duration-700 ${isDetecting ? 'flex opacity-100 pointer-events-auto' : 'hidden opacity-0 pointer-events-none'}`}>
-        <button onClick={stopCamera} className="absolute top-6 right-6 md:top-10 md:right-10 px-4 py-2 bg-red-500/10 hover:bg-red-500 border border-red-500/50 hover:border-red-500 text-red-500 hover:text-white rounded-full transition-all duration-300 flex items-center gap-2 group z-[110]">
-          <span className="font-bold text-sm tracking-wider">TUTUP</span>
-          <svg className="h-5 w-5 md:h-6 md:w-6 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12"></path>
-          </svg>
-        </button>
+      {/* Detection Simulation WebRTC Overlay (Sci-Fi Glassmorphism) */}
+      <div className={`fixed inset-0 z-[100] bg-[#030305]/95 backdrop-blur-[40px] flex-col items-center justify-center transition-all duration-700 ${isDetecting ? 'flex opacity-100 pointer-events-auto' : 'hidden opacity-0 pointer-events-none'}`}>
 
-        <div className="text-center mb-6 md:mb-12 mt-16 md:mt-0 px-4 w-full">
-          <h2 className="text-2xl md:text-4xl font-black text-[#10B981] mb-2 md:mb-3 tracking-tight drop-shadow-[0_0_10px_rgba(16,185,129,0.5)]">Kamera Aktif: Analisis AI</h2>
-          <p className="text-gray-500 font-bold tracking-widest uppercase text-[10px] md:text-xs">Scanning for PPE compliance...</p>
+        {/* Background Gradients for depth */}
+        <div className="absolute top-0 right-0 w-[800px] h-[800px] bg-[#10B981]/5 rounded-full blur-[120px] pointer-events-none"></div>
+        <div className="absolute bottom-0 left-0 w-[600px] h-[600px] bg-red-500/5 rounded-full blur-[100px] pointer-events-none"></div>
+
+        {/* Top Navigation Bar of the Overlay */}
+        <div className="absolute top-0 w-full px-6 py-5 flex justify-between items-center bg-gradient-to-b from-black/80 to-transparent z-[110]">
+          <div className="flex items-center gap-4">
+            <div className="w-10 h-10 bg-[#10B981]/20 rounded-xl flex items-center justify-center border border-[#10B981]/40 shadow-[0_0_20px_rgba(16,185,129,0.3)]">
+              <svg className="h-5 w-5 text-[#10B981]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+            </div>
+            <div>
+              <h2 className="text-xl md:text-2xl font-black text-white tracking-wide">K3<span className="text-[#10B981]">GUARD</span> VISION</h2>
+              <p className="text-[#10B981] font-mono text-[10px] tracking-widest uppercase flex items-center gap-2">
+                <span className="w-1.5 h-1.5 bg-[#10B981] rounded-full animate-pulse"></span> Active Surveillance
+              </p>
+            </div>
+          </div>
+
+          <button onClick={stopCamera} className="px-6 py-2.5 bg-red-500/10 hover:bg-red-500 border border-red-500/30 hover:border-red-500 text-red-500 hover:text-white rounded-full transition-all duration-300 flex items-center gap-3 group backdrop-blur-md shadow-[0_0_20px_rgba(239,68,68,0.1)] hover:shadow-[0_0_30px_rgba(239,68,68,0.5)]">
+            <span className="font-bold text-xs uppercase tracking-widest">Tutup</span>
+            <svg className="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12"></path></svg>
+          </button>
         </div>
 
-        <div className="relative w-full aspect-video md:aspect-[21/9] lg:aspect-video max-w-5xl mx-auto rounded-2xl md:rounded-[2.5rem] overflow-hidden border-2 border-[#10B981]/30 shadow-[0_0_40px_rgba(16,185,129,0.15)] md:shadow-[0_0_80px_rgba(16,185,129,0.15)] bg-black">
-          {/* The Video Element that was missing! */}
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="w-full h-full object-contain"
-          />
-          <canvas ref={canvasRef} className="hidden" />
+        {/* Main Content Area */}
+        <div className="flex flex-col xl:flex-row w-full max-w-[1400px] h-[85vh] mt-16 px-6 gap-6 z-10">
 
-          <div className="absolute top-4 left-4 md:top-8 md:left-8 bg-black/80 px-2 md:px-4 py-1 md:py-2 rounded-lg md:rounded-xl border border-white/10 text-[10px] md:text-xs text-red-500 font-black flex items-center gap-2 md:gap-3 backdrop-blur-md">
-            <span className="w-2 h-2 md:w-2.5 md:h-2.5 bg-red-500 rounded-full animate-pulse shadow-[0_0_10px_#ef4444]"></span> REC
-          </div>
+          {/* Left Panel: Camera Feed (70%) */}
+          <div className="relative flex-grow flex flex-col bg-black/40 backdrop-blur-xl rounded-[2rem] border border-white/10 p-4 shadow-2xl overflow-hidden group">
 
-          <div className="absolute top-4 right-4 md:top-8 md:right-8 bg-black/80 px-2 md:px-4 py-1 md:py-2 rounded-lg md:rounded-xl border border-white/10 text-[10px] md:text-xs text-[#10B981] font-black flex items-center gap-2 md:gap-3 backdrop-blur-md">
-            <span className="w-2 h-2 md:w-2.5 md:h-2.5 bg-[#10B981] rounded-full animate-pulse shadow-[0_0_10px_#10B981]"></span> {connectionStatus === "connected" ? "CONNECTED" : "CONNECTING..."}
-          </div>
+            {/* Camera Decorative HUD Elements */}
+            <div className="absolute top-8 left-8 w-16 h-16 border-t-2 border-l-2 border-white/20 rounded-tl-3xl z-20"></div>
+            <div className="absolute top-8 right-8 w-16 h-16 border-t-2 border-r-2 border-white/20 rounded-tr-3xl z-20"></div>
+            <div className="absolute bottom-8 left-8 w-16 h-16 border-b-2 border-l-2 border-white/20 rounded-bl-3xl z-20"></div>
+            <div className="absolute bottom-8 right-8 w-16 h-16 border-b-2 border-r-2 border-white/20 rounded-br-3xl z-20"></div>
 
-          {/* Dynamic Bounding Boxes */}
-          <div className="absolute inset-0 w-full h-full pointer-events-none">
-            {stats.boxes?.map((box, idx) => {
-              const isSafe = box.label === 'safetyhelmet';
-              const colorClass = isSafe ? 'border-[#10B981]' : 'border-red-500';
-              const bgClass = isSafe ? 'bg-[#10B981]' : 'bg-red-500';
-              const title = isSafe ? 'HELMET' : 'NO HELMET';
+            <div className={`relative w-full h-full rounded-[1.5rem] overflow-hidden border ${stats.danger > 0 ? 'border-red-500/50 shadow-[0_0_50px_rgba(239,68,68,0.2)]' : 'border-[#10B981]/30 shadow-[0_0_60px_rgba(16,185,129,0.15)]'} bg-[#050505] transition-all duration-500`}>
 
-              return (
-                <div
-                  key={idx}
-                  className={`absolute border-[2px] md:border-[3px] rounded-lg shadow-[0_0_15px_rgba(0,0,0,0.5)] transition-all duration-75 ${colorClass}`}
-                  style={{
-                    left: `${box.x1 * 100}%`,
-                    top: `${box.y1 * 100}%`,
-                    width: `${box.width * 100}%`,
-                    height: `${box.height * 100}%`
-                  }}
-                >
-                  <div className={`text-black flex items-center justify-center text-[8px] md:text-[10px] absolute -top-5 md:-top-6 left-[-2px] px-2 py-0.5 md:py-1 font-black rounded-t-md shadow-lg ${bgClass}`}>
-                    CLASS: {title} ({box.confidence.toFixed(2)})
-                  </div>
+              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+              <canvas ref={canvasRef} className="hidden" />
+
+              {/* Status Indicators overlaid on video */}
+              <div className="absolute top-4 left-4 flex gap-3">
+                <div className="bg-black/80 px-3 py-1.5 rounded-lg border border-white/10 text-[10px] text-red-500 font-mono font-bold flex items-center gap-2 backdrop-blur-md">
+                  <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse shadow-[0_0_10px_#ef4444]"></span> REC
                 </div>
-              );
-            })}
+                <div className="bg-black/80 px-3 py-1.5 rounded-lg border border-white/10 text-[10px] text-gray-400 font-mono flex items-center gap-2 backdrop-blur-md">
+                  720P / 60FPS
+                </div>
+              </div>
+
+              <div className="absolute top-4 right-4 bg-black/80 px-3 py-1.5 rounded-lg border border-white/10 text-[10px] text-[#10B981] font-mono font-bold flex items-center gap-2 backdrop-blur-md">
+                <span className="w-2 h-2 bg-[#10B981] rounded-full animate-pulse shadow-[0_0_10px_#10B981]"></span> {connectionStatus === "connected" ? "YOLOV8.0.6 ONLINE" : "BINDING API..."}
+              </div>
+
+              {/* Bounding Boxes Rendering */}
+              <div className="absolute inset-0 w-full h-full pointer-events-none">
+                {stats.boxes?.map((box, idx) => {
+                  const isSafe = box.label === 'safetyhelmet';
+                  const colorClass = isSafe ? 'border-[#10B981]' : 'border-[#ef4444]';
+                  const bgClass = isSafe ? 'bg-[#10B981]/20' : 'bg-[#ef4444]/20';
+                  const title = isSafe ? 'HELMET_PROTECTED' : 'WARNING_NO_HELMET';
+                  const titleBg = isSafe ? 'bg-[#10B981] text-black' : 'bg-[#ef4444] text-white';
+
+                  return (
+                    <div
+                      key={idx}
+                      className={`absolute border-[2px] ${colorClass} ${bgClass} shadow-[0_0_20px_rgba(0,0,0,0.4)]`}
+                      style={{
+                        left: `${box.x1 * 100}%`, top: `${box.y1 * 100}%`,
+                        width: `${box.width * 100}%`, height: `${box.height * 100}%`
+                      }}
+                    >
+                      <div className={`flex items-center justify-between text-[9px] absolute -top-6 left-[-2px] px-2 py-1 font-mono font-bold whitespace-nowrap shadow-lg border border-b-0 ${colorClass} ${titleBg}`}>
+                        <span>[{title}]</span>
+                        <span className="ml-3 font-black">{(box.confidence * 100).toFixed(0)}%</span>
+                      </div>
+                      {/* Box corner accents */}
+                      <div className={`absolute -top-1 -left-1 w-2 h-2 border-t-[3px] border-l-[3px] ${colorClass}`}></div>
+                      <div className={`absolute -bottom-1 -right-1 w-2 h-2 border-b-[3px] border-r-[3px] ${colorClass}`}></div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="absolute h-[2px] w-full z-20 shadow-[0_0_20px_#10B981] bg-gradient-to-r from-transparent via-[#10B981]/80 to-transparent animate-[scan_3s_linear_infinite] opacity-50"></div>
+            </div>
           </div>
 
-          <div className="absolute h-[2px] md:h-[3px] w-full z-20 shadow-[0_0_15px_#10B981] bg-gradient-to-r from-transparent via-[#10B981] to-transparent animate-[scan_3s_linear_infinite] opacity-60"></div>
-        </div>
+          {/* Right Panel: Telemetry Dashboard (30%) */}
+          <div className="w-full xl:w-96 flex flex-col gap-4">
 
-        <div className="mt-8 md:mt-16 flex flex-row gap-4 md:gap-8 px-4 w-full md:w-auto justify-center">
-          <div className="bg-white/5 backdrop-blur-[20px] rounded-xl md:rounded-2xl border border-white/10 p-3 md:px-10 md:py-5 flex flex-col items-center flex-1 md:flex-none">
-            <span className="text-[9px] md:text-[10px] text-gray-500 uppercase font-black tracking-widest mb-1 text-center">Confidence</span>
-            <span className="text-xl md:text-3xl font-black text-[#10B981]">{stats.total > 0 ? stats.confidence.toFixed(1) + '%' : '0%'}</span>
-          </div>
-          <div className="bg-white/5 backdrop-blur-[20px] rounded-xl md:rounded-2xl border border-white/10 p-3 md:px-10 md:py-5 flex flex-col items-center flex-1 md:flex-none transition-colors duration-500" style={{ backgroundColor: stats.danger > 0 ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.05)' }}>
-            <span className="text-[9px] md:text-[10px] text-gray-500 uppercase font-black tracking-widest mb-1 text-center">Status</span>
-            <span className={`text-xl md:text-3xl font-black ${stats.danger > 0 ? "text-red-500" : "text-white"}`}>{stats.danger > 0 ? 'WARNING!' : 'SECURED'}</span>
+            {/* Global Status Card */}
+            <div className={`relative p-6 rounded-[2rem] border overflow-hidden transition-colors duration-500 ${stats.total === 0 ? 'bg-yellow-500/10 border-yellow-500/30' : stats.danger > 0 ? 'bg-red-500/10 border-red-500/30' : 'bg-[#10B981]/10 border-[#10B981]/30'} backdrop-blur-xl`}>
+              <div className={`absolute top-0 right-0 w-32 h-32 rounded-full blur-[50px] transition-colors duration-500 ${stats.total === 0 ? "bg-yellow-500/20" : stats.danger > 0 ? "bg-red-500/20" : "bg-[#10B981]/20"}`}></div>
+              <h3 className="text-gray-400 font-mono text-[10px] uppercase tracking-[0.2em] mb-2">System Status</h3>
+              <div className="flex items-end gap-4 mb-4">
+                <span className={`text-4xl font-black ${stats.total === 0 ? "text-yellow-500" : stats.danger > 0 ? "text-red-500" : "text-[#10B981]"}`}>
+                  {stats.total === 0 ? 'NO TARGET' : stats.danger > 0 ? 'BREACH DETECTED' : 'SECURED'}
+                </span>
+              </div>
+
+              {stats.total === 0 ? (
+                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3 flex gap-3 text-yellow-500 text-sm font-medium">
+                  <svg className="w-5 h-5 flex-shrink-0 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                  Menunggu pergerakan target ke dalam jangkauan kamera...
+                </div>
+              ) : stats.danger > 0 ? (
+                <div className="bg-red-500/20 border border-red-500/50 rounded-xl p-3 flex gap-3 text-red-500 text-sm font-bold animate-pulse">
+                  <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                  Pelanggaran K3! Pekerja tanpa helm ditemukan.
+                </div>
+              ) : (
+                <div className="bg-[#10B981]/10 border border-[#10B981]/30 rounded-xl p-3 flex gap-3 text-[#10B981] text-sm font-medium">
+                  <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                  Seluruh visibilitas area aman dan mematuhi protokol K3.
+                </div>
+              )}
+            </div>
+
+            {/* Metrics Grid */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-white/5 border border-white/10 rounded-2xl p-5 backdrop-blur-md">
+                <svg className="w-5 h-5 text-gray-500 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
+                <div className="text-gray-500 font-mono text-[9px] uppercase tracking-wider mb-1">Human Target</div>
+                <div className="text-3xl font-black text-white">{stats.total}</div>
+              </div>
+              <div className="bg-white/5 border border-white/10 rounded-2xl p-5 backdrop-blur-md">
+                <svg className="w-5 h-5 text-gray-500 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+                <div className="text-gray-500 font-mono text-[9px] uppercase tracking-wider mb-1">AI Confidence</div>
+                <div className="flex items-baseline gap-1">
+                  <span className="text-3xl font-black text-white">{stats.total > 0 ? stats.confidence.toFixed(0) : '0'}</span>
+                  <span className="text-gray-400 font-bold">%</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Analysis Log */}
+            <div className="flex-grow bg-white/5 border border-white/10 rounded-2xl p-5 backdrop-blur-md flex flex-col">
+              <h3 className="text-gray-400 font-mono text-[10px] uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"></path></svg>
+                Live Detection Log
+              </h3>
+
+              <div className="flex-grow flex flex-col justify-end space-y-2 font-mono text-xs overflow-hidden relative">
+                <div className="absolute top-0 w-full h-10 bg-gradient-to-b from-[#0e0e11] to-transparent z-10 pointer-events-none"></div>
+                {stats.boxes?.slice(0, 5).map((box, i) => (
+                  <div key={i} className={`flex justify-between items-center py-2 px-3 rounded text-opacity-80 border-l-2 ${box.label === 'safetyhelmet' ? 'bg-[#10B981]/10 border-[#10B981] text-[#10B981]' : 'bg-red-500/10 border-red-500 text-red-500'}`}>
+                    <span>Target_{i + 1}: {box.label.toUpperCase()}</span>
+                    <span>{(box.confidence * 100).toFixed(1)}%</span>
+                  </div>
+                ))}
+
+                {stats.total === 0 && (
+                  <div className="text-center text-gray-600 py-6 font-mono border border-dashed border-gray-700/50 rounded-lg">
+                    [NO_TARGETS_IN_FRAME]
+                  </div>
+                )}
+              </div>
+            </div>
+
           </div>
         </div>
       </div>
